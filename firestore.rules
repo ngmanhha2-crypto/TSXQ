@@ -57,16 +57,18 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() && 
         (
-          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-          request.auth.token.email == "ngmanhha2@gmail.com"
+          request.auth.uid == "DNsZEJvs3vSfk8m5uyp0Nx21Fz82" ||
+          request.auth.token.email == "ngmanhha2@gmail.com" ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
         );
     }
 
     function isActive() {
       return isAuthenticated() && 
         (
-          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active') ||
-          request.auth.token.email == "ngmanhha2@gmail.com"
+          request.auth.uid == "DNsZEJvs3vSfk8m5uyp0Nx21Fz82" ||
+          request.auth.token.email == "ngmanhha2@gmail.com" ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active')
         );
     }
 
@@ -101,7 +103,7 @@ service cloud.firestore {
     }
 
     function isValidAsset(data) {
-      return hasRequiredFields(['id', 'code', 'name', 'type', 'dateAdded', 'unit', 'quantityAdded', 'quantityReduced', 'quantityRemaining', 'totalValue', 'allocatedAmount', 'remainingAmount', 'inventoryCount', 'history']) &&
+      return hasRequiredFields(['id', 'code', 'name', 'type', 'dateAdded', 'unit', 'quantityAdded', 'quantityReduced', 'quantityRemaining', 'totalValue', 'allocatedAmount', 'remainingAmount', 'inventoryCount', 'history', 'notes']) &&
              data.id is string && data.id.size() > 0 &&
              data.code is string && data.code.size() > 0 &&
              data.name is string && data.name.size() > 0 &&
@@ -114,7 +116,8 @@ service cloud.firestore {
              data.allocatedAmount is number &&
              data.remainingAmount is number &&
              data.inventoryCount is number &&
-             data.history is list;
+             data.history is list &&
+             data.notes is string;
     }
 
     function isValidInventoryLog(data) {

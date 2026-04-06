@@ -458,7 +458,9 @@ export default function App() {
   };
 
   const finishInventory = async () => {
-    const newLog: Omit<InventoryLog, 'id'> = {
+    const logRef = doc(collection(db, 'inventoryLogs'));
+    const newLog: InventoryLog = {
+      id: logRef.id,
       date: inventoryDate,
       performedBy: user?.email || 'Admin',
       items: currentInventory.map(item => {
@@ -473,8 +475,8 @@ export default function App() {
       })
     };
 
-    const logPath = 'inventoryLogs';
-    await addDoc(collection(db, 'inventoryLogs'), newLog).catch(e => handleFirestoreError(e, OperationType.CREATE, logPath));
+    const logPath = `inventoryLogs/${logRef.id}`;
+    await setDoc(logRef, newLog).catch(e => handleFirestoreError(e, OperationType.CREATE, logPath));
     
     // Update asset history for each item in inventory
     for (const item of currentInventory) {
@@ -624,9 +626,10 @@ export default function App() {
   const handleCreateAsset = async (e: FormEvent) => {
     e.preventDefault();
     const today = new Date().toISOString().split('T')[0];
-    const path = 'assets';
-    const newAssetFull: Omit<Asset, 'id'> = {
+    const assetRef = doc(collection(db, 'assets'));
+    const newAssetFull: Asset = {
       ...(newAsset as Asset),
+      id: assetRef.id,
       quantityReduced: 0,
       allocatedAmount: 0,
       inventoryCount: 1,
@@ -635,7 +638,8 @@ export default function App() {
       ]
     };
     
-    await addDoc(collection(db, 'assets'), newAssetFull).catch(e => handleFirestoreError(e, OperationType.CREATE, path));
+    const path = `assets/${assetRef.id}`;
+    await setDoc(assetRef, newAssetFull).catch(e => handleFirestoreError(e, OperationType.CREATE, path));
     setIsAddingNew(false);
     setNewAsset({
       type: 'fixed',
@@ -697,16 +701,20 @@ export default function App() {
 
       const today = new Date().toISOString().split('T')[0];
       const importedAssets = jsonData.map((row: any) => {
-        const totalValue = Number(row['Tổng giá trị'] || row['Giá trị gốc'] || 0);
-        const allocatedAmount = Number(row['Giá trị đã phân bổ'] || row['Đã phân bổ'] || 0);
-        const quantity = Number(row['Số lượng'] || row['SL'] || 1);
+        const rawTotalValue = Number(row['Tổng giá trị'] || row['Giá trị gốc'] || 0);
+        const rawAllocatedAmount = Number(row['Giá trị đã phân bổ'] || row['Đã phân bổ'] || 0);
+        const rawQuantity = Number(row['Số lượng'] || row['SL'] || 1);
+        
+        const totalValue = isNaN(rawTotalValue) ? 0 : rawTotalValue;
+        const allocatedAmount = isNaN(rawAllocatedAmount) ? 0 : rawAllocatedAmount;
+        const quantity = isNaN(rawQuantity) ? 1 : rawQuantity;
         
         return {
-          code: String(row['Mã tài sản'] || row['Mã'] || ''),
+          code: String(row['Mã tài sản'] || row['Mã'] || `TS-${Math.random().toString(36).substr(2, 5).toUpperCase()}`),
           name: String(row['Tên tài sản'] || row['Tên'] || 'Tài sản không tên'),
           type: (String(row['Phân loại'] || '').toLowerCase().includes('cố định') || String(row['Loại'] || '').toLowerCase().includes('fixed')) ? 'fixed' : 'tool',
-          dateAdded: row['Ngày bắt đầu'] || row['Ngày nhập'] || today,
-          unit: row['ĐVT'] || row['Đơn vị'] || 'Cái',
+          dateAdded: String(row['Ngày bắt đầu'] || row['Ngày nhập'] || today),
+          unit: String(row['ĐVT'] || row['Đơn vị'] || 'Cái'),
           quantityAdded: quantity,
           quantityReduced: 0,
           quantityRemaining: quantity,
@@ -714,7 +722,7 @@ export default function App() {
           allocatedAmount: allocatedAmount,
           remainingAmount: totalValue - allocatedAmount,
           inventoryCount: quantity,
-          notes: row['Ghi chú'] || '',
+          notes: String(row['Ghi chú'] || ''),
           history: [
             { id: Math.random().toString(36).substr(2, 9), date: today, type: 'update', description: 'Nhập từ file Excel' }
           ]
@@ -723,13 +731,19 @@ export default function App() {
 
       if (importedAssets.length > 0) {
         try {
-          const path = 'assets';
-          // Use Promise.all for faster parallel writes
-          await Promise.all(importedAssets.map(asset => addDoc(collection(db, 'assets'), asset)));
+          // Use setDoc with pre-generated IDs for faster parallel writes and rule compliance
+          let successCount = 0;
+          await Promise.all(importedAssets.map(async (assetData) => {
+            const assetRef = doc(collection(db, 'assets'));
+            const assetWithId = { ...assetData, id: assetRef.id };
+            await setDoc(assetRef, assetWithId);
+            successCount++;
+          }));
           
-          setToast({ message: `Đã nhập thành công ${importedAssets.length} tài sản!`, type: 'success' });
+          setToast({ message: `Đã nhập thành công ${successCount} tài sản!`, type: 'success' });
           setTimeout(() => setToast(null), 3000);
         } catch (error) {
+          console.error("Excel Import Error:", error);
           handleFirestoreError(error, OperationType.CREATE, 'assets');
         }
       }
