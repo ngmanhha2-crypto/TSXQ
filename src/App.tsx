@@ -336,7 +336,8 @@ export default function App() {
         };
         await setDoc(doc(db, 'users', newUser.uid), newProfile).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${newUser.uid}`));
         await sendEmailVerification(newUser);
-        alert('Đã gửi email xác thực. Vui lòng kiểm tra hộp thư của bạn.');
+        setToast({ message: 'Đã gửi email xác thực. Vui lòng kiểm tra hộp thư của bạn.', type: 'success' });
+        setTimeout(() => setToast(null), 5000);
       } else {
         await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
       }
@@ -486,7 +487,20 @@ export default function App() {
       if (asset) {
         const assetPath = `assets/${asset.id}`;
         const statusText = item.status === 'ok' ? 'Đủ' : item.status === 'missing' ? 'Thiếu' : 'Hỏng';
+        
+        let newNotes = asset.notes;
+        if (item.status === 'damaged') {
+          if (!newNotes.toLowerCase().includes('hỏng')) {
+            newNotes = newNotes ? `${newNotes}, Hỏng` : 'Hỏng';
+          }
+        } else if (item.status === 'ok') {
+          // If it was marked as hỏng, and now it's ok, we remove it from notes
+          newNotes = newNotes.replace(/,?\s*[Hh]ỏng/g, '').trim();
+          if (newNotes.startsWith(',')) newNotes = newNotes.substring(1).trim();
+        }
+
         await updateDoc(doc(db, 'assets', asset.id), {
+          notes: newNotes,
           history: [
             ...asset.history,
             { 
@@ -501,7 +515,8 @@ export default function App() {
     }
 
     setIsInventorying(false);
-    alert('Đã lưu kết quả kiểm kê vào nhật ký hệ thống!');
+    setToast({ message: 'Đã lưu kết quả kiểm kê thành công!', type: 'success' });
+    setTimeout(() => setToast(null), 3000);
   };
 
   const handlePrintInventory = (log: InventoryLog) => {
