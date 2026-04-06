@@ -1,21 +1,9 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-
-// 1. Cục config giữ nguyên, KHÔNG thêm firestoreDatabaseId vào đây
-const firebaseConfig = {
-  apiKey: "AIzaSyDE2LIPsuxhVOTrF62iQcaYde-6dZcWw_U",
-  authDomain: "myapp-74eb0.firebaseapp.com",
-  projectId: "myapp-74eb0",
-  storageBucket: "myapp-74eb0.firebasestorage.app",
-  messagingSenderId: "578095507405",
-  appId: "1:578095507405:web:cbccf79b63c55ee8d00684"
-};
-
-// 2. Khởi tạo App
-const app = initializeApp(firebaseConfig);
-
-// 3. ĐÂY LÀ CHỖ QUAN TRỌNG NHẤT: Truyền tên database vào làm tham số thứ 2
-const db = getFirestore(app, "ai-studio-ce4b0b4d-6d32-4979-8c6a-60145260afcd");
-
-// Sau đó bạn export db ra để dùng ở các file khác bình thường
-export { db };
+{
+  "apiKey": "AIzaSyDE2LIPsuxhVOTrF62iQcaYde-6dZcWw_U",
+  "authDomain": "myapp-74eb0.firebaseapp.com",
+  "projectId": "myapp-74eb0",
+  "storageBucket": "myapp-74eb0.firebasestorage.app",
+  "messagingSenderId": "578095507405",
+  "appId": "1:578095507405:web:cbccf79b63c55ee8d00684",
+  "firestoreDatabaseId": "ai-studio-ce4b0b4d-6d32-4979-8c6a-60145260afcd"
+}
