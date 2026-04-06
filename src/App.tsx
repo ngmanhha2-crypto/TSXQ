@@ -208,6 +208,8 @@ export default function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState<string | null>(null);
+  const [isConfirmingDeleteAll, setIsConfirmingDeleteAll] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Inventory State
@@ -623,6 +625,30 @@ export default function App() {
     }
   };
 
+  const handleDeleteAllAssets = async () => {
+    if (userProfile?.role !== 'admin') return;
+    setIsDeletingAll(true);
+    
+    try {
+      // Delete all assets in the current list
+      const deletePromises = assets.map(asset => {
+        const path = `assets/${asset.id}`;
+        return deleteDoc(doc(db, 'assets', asset.id)).catch(e => handleFirestoreError(e, OperationType.DELETE, path));
+      });
+      
+      await Promise.all(deletePromises);
+      
+      setToast({ message: 'Đã xóa toàn bộ tài sản thành công!', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+      setIsConfirmingDeleteAll(false);
+    } catch (error) {
+      console.error("Delete All Error:", error);
+      handleFirestoreError(error, OperationType.DELETE, 'assets');
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   const handleCreateAsset = async (e: FormEvent) => {
     e.preventDefault();
     const today = new Date().toISOString().split('T')[0];
@@ -694,12 +720,64 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = async (event) => {
       const data = new Uint8Array(event.target?.result as ArrayBuffer);
-      const workbook = XLSX.read(data, { type: 'array' });
+      const workbook = XLSX.read(data, { type: 'array', cellDates: true });
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
       const today = new Date().toISOString().split('T')[0];
+
+      const parseExcelDate = (val: any) => {
+        if (!val) return today;
+        
+        // If XLSX already parsed it as a Date object
+        if (val instanceof Date) {
+          if (isNaN(val.getTime())) return today;
+          return val.toISOString().split('T')[0];
+        }
+
+        if (typeof val === 'number') {
+          // Excel serial date to JS Date (Excel starts from 1899-12-30)
+          const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+          if (isNaN(date.getTime())) return today;
+          return date.toISOString().split('T')[0];
+        }
+
+        if (typeof val === 'string') {
+          const trimmed = val.trim();
+          if (!trimmed) return today;
+
+          // Try standard parsing
+          const d = new Date(trimmed);
+          if (!isNaN(d.getTime())) {
+            return d.toISOString().split('T')[0];
+          }
+
+          // Handle common DD/MM/YYYY or DD-MM-YYYY format
+          const parts = trimmed.split(/[-/.]/);
+          if (parts.length === 3) {
+            let day, month, year;
+            if (parts[2].length === 4) { // DD/MM/YYYY
+              day = parseInt(parts[0], 10);
+              month = parseInt(parts[1], 10) - 1;
+              year = parseInt(parts[2], 10);
+            } else if (parts[0].length === 4) { // YYYY/MM/DD
+              year = parseInt(parts[0], 10);
+              month = parseInt(parts[1], 10) - 1;
+              day = parseInt(parts[2], 10);
+            }
+            
+            if (year && month !== undefined && day) {
+              const d2 = new Date(year, month, day);
+              if (!isNaN(d2.getTime())) {
+                return d2.toISOString().split('T')[0];
+              }
+            }
+          }
+        }
+        return today;
+      };
+
       const importedAssets = jsonData.map((row: any) => {
         const rawTotalValue = Number(row['Tổng giá trị'] || row['Giá trị gốc'] || 0);
         const rawAllocatedAmount = Number(row['Giá trị đã phân bổ'] || row['Đã phân bổ'] || 0);
@@ -709,11 +787,13 @@ export default function App() {
         const allocatedAmount = isNaN(rawAllocatedAmount) ? 0 : rawAllocatedAmount;
         const quantity = isNaN(rawQuantity) ? 1 : rawQuantity;
         
+        const rawDate = row['Ngày bắt đầu'] || row['Ngày nhập'] || row['Ngày'] || today;
+        
         return {
           code: String(row['Mã tài sản'] || row['Mã'] || `TS-${Math.random().toString(36).substr(2, 5).toUpperCase()}`),
           name: String(row['Tên tài sản'] || row['Tên'] || 'Tài sản không tên'),
           type: (String(row['Phân loại'] || '').toLowerCase().includes('cố định') || String(row['Loại'] || '').toLowerCase().includes('fixed')) ? 'fixed' : 'tool',
-          dateAdded: String(row['Ngày bắt đầu'] || row['Ngày nhập'] || today),
+          dateAdded: parseExcelDate(rawDate),
           unit: String(row['ĐVT'] || row['Đơn vị'] || 'Cái'),
           quantityAdded: quantity,
           quantityReduced: 0,
@@ -900,6 +980,16 @@ export default function App() {
               <LogOut size={18} />
             </button>
             <div className="hidden items-center gap-1 sm:flex">
+              {userProfile?.role === 'admin' && assets.length > 0 && (
+                <button 
+                  onClick={() => setIsConfirmingDeleteAll(true)}
+                  className="flex items-center gap-2 rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-600 transition-all hover:bg-rose-50 dark:border-rose-900/30 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20"
+                  title="Xóa toàn bộ tài sản"
+                >
+                  <Trash2 size={16} />
+                  <span className="hidden lg:inline">Xóa tất cả</span>
+                </button>
+              )}
               <button 
                 onClick={handleDownloadTemplate}
                 className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
@@ -914,6 +1004,15 @@ export default function App() {
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImportExcel} />
               </label>
             </div>
+            {userProfile?.role === 'admin' && assets.length > 0 && (
+              <button 
+                onClick={() => setIsConfirmingDeleteAll(true)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-white text-rose-600 transition-all hover:bg-rose-50 sm:hidden dark:border-rose-900/30 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20"
+                title="Xóa toàn bộ tài sản"
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
             <button 
               onClick={() => setIsAddingNew(true)}
               className="flex items-center gap-2 rounded-lg bg-blue-600 px-3 sm:px-4 py-2 text-xs sm:text-sm font-semibold text-white shadow-md shadow-blue-200 transition-all hover:bg-blue-700 active:scale-95 dark:shadow-blue-900/20"
@@ -1526,7 +1625,10 @@ export default function App() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center text-slate-500 dark:text-slate-400">
-                        {new Date(asset.dateAdded).toLocaleDateString('vi-VN')}
+                        {(() => {
+                          const d = new Date(asset.dateAdded);
+                          return isNaN(d.getTime()) ? asset.dateAdded : d.toLocaleDateString('vi-VN');
+                        })()}
                       </td>
                       <td className="px-6 py-4 text-center">
                         <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400">
@@ -2316,6 +2418,58 @@ export default function App() {
                   className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-200 transition-all hover:bg-rose-700 dark:shadow-rose-900/20"
                 >
                   Xác nhận xóa
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete All Confirmation Modal */}
+      <AnimatePresence>
+        {isConfirmingDeleteAll && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsConfirmingDeleteAll(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm overflow-hidden rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-900"
+            >
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+                <Trash2 size={24} />
+              </div>
+              <h3 className="mb-2 text-lg font-bold text-slate-900 dark:text-white">Xóa toàn bộ tài sản?</h3>
+              <p className="mb-6 text-sm text-slate-500 leading-relaxed dark:text-slate-400">
+                Bạn có chắc chắn muốn xóa <span className="font-bold text-rose-600">{assets.length}</span> tài sản? Hành động này sẽ xóa vĩnh viễn toàn bộ dữ liệu tài sản và không thể hoàn tác.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setIsConfirmingDeleteAll(false)}
+                  disabled={isDeletingAll}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 disabled:opacity-50"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={handleDeleteAllAssets}
+                  disabled={isDeletingAll}
+                  className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-200 transition-all hover:bg-rose-700 dark:shadow-rose-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isDeletingAll ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      Đang xóa...
+                    </>
+                  ) : (
+                    'Xác nhận xóa tất cả'
+                  )}
                 </button>
               </div>
             </motion.div>
