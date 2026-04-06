@@ -32,7 +32,8 @@ import {
   User,
   Lock,
   Mail,
-  Loader2
+  Loader2,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -1083,7 +1084,16 @@ export default function App() {
             className="space-y-6"
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Quản lý người dùng</h2>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setActiveTab('all')}
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-all hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800"
+                  title="Quay lại danh sách tài sản"
+                >
+                  <ArrowLeft size={20} />
+                </button>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Quản lý người dùng</h2>
+              </div>
               <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600 dark:bg-blue-900/20 dark:text-blue-400">
                 <User size={14} />
                 {allUsers.length} Người dùng
@@ -1504,7 +1514,12 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                        {currentInventory.map(item => {
+                        {currentInventory.filter(item => {
+                          const asset = assets.find(a => a.id === item.assetId);
+                          if (!asset) return false;
+                          return asset.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                 asset.code.toLowerCase().includes(searchTerm.toLowerCase());
+                        }).map(item => {
                           const asset = assets.find(a => a.id === item.assetId);
                           if (!asset) return null;
                           return (
