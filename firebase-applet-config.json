@@ -2,7 +2,7 @@
   "apiKey": "AIzaSyDE2LIPsuxhVOTrF62iQcaYde-6dZcWw_U",
   "authDomain": "myapp-74eb0.firebaseapp.com",
   "projectId": "myapp-74eb0",
-  "storageBucket": "myapp-74eb0.firebasestorage.app",
+"storageBucket": "myapp-74eb0.appspot.com"
   "messagingSenderId": "578095507405",
   "appId": "1:578095507405:web:cbccf79b63c55ee8d00684",
   "firestoreDatabaseId": "(default)"
