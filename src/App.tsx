@@ -789,10 +789,13 @@ export default function App() {
         
         const rawDate = row['Ngày bắt đầu'] || row['Ngày nhập'] || row['Ngày'] || today;
         
+        const typeStr = String(row['Phân loại'] || row['Loại'] || '').toLowerCase();
+        const isFixed = typeStr.includes('cố định') || typeStr.includes('fixed') || typeStr.includes('tscđ') || typeStr.includes('tscd');
+
         return {
           code: String(row['Mã tài sản'] || row['Mã'] || `TS-${Math.random().toString(36).substr(2, 5).toUpperCase()}`),
           name: String(row['Tên tài sản'] || row['Tên'] || 'Tài sản không tên'),
-          type: (String(row['Phân loại'] || '').toLowerCase().includes('cố định') || String(row['Loại'] || '').toLowerCase().includes('fixed')) ? 'fixed' : 'tool',
+          type: isFixed ? 'fixed' : 'tool',
           dateAdded: parseExcelDate(rawDate),
           unit: String(row['ĐVT'] || row['Đơn vị'] || 'Cái'),
           quantityAdded: quantity,
