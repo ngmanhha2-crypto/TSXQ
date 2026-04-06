@@ -1,7 +1,51 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - role: string (required, ['admin', 'user'])
+    //   - status: string (required, ['active', 'pending', 'disabled'])
+    //   - createdAt: string (required, ISO 8601)
+    //
+    // Collection: assets
+    // Document ID: assetId
+    // Fields:
+    //   - id: string (required)
+    //   - code: string (required)
+    //   - name: string (required)
+    //   - type: string (required, ['fixed', 'tool'])
+    //   - dateAdded: string (required, ISO 8601)
+    //   - unit: string (required)
+    //   - quantityAdded: number (required)
+    //   - quantityReduced: number (required)
+    //   - quantityRemaining: number (required)
+    //   - totalValue: number (required)
+    //   - allocatedAmount: number (required)
+    //   - remainingAmount: number (required)
+    //   - inventoryCount: number (required)
+    //   - history: list (required, objects with id, date, type, description)
+    //
+    // Collection: inventoryLogs
+    // Document ID: logId
+    // Fields:
+    //   - id: string (required)
+    //   - date: string (required, ISO 8601)
+    //   - items: list (required, objects with assetId, assetName, assetCode, status, note)
+    //   - performedBy: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -12,35 +56,104 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "ngmanhha2@gmail.com" && request.auth.token.email_verified == true));
+        (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          request.auth.token.email == "ngmanhha2@gmail.com"
+        );
     }
 
     function isActive() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' ||
-         request.auth.token.email == "ngmanhha2@gmail.com");
+        (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active') ||
+          request.auth.token.email == "ngmanhha2@gmail.com"
+        );
     }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data, userId) {
+      return hasRequiredFields(['uid', 'email', 'role', 'status', 'createdAt']) &&
+             hasOnlyAllowedFields(['uid', 'email', 'role', 'status', 'createdAt']) &&
+             data.uid == userId &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'user'] &&
+             data.status in ['active', 'pending', 'disabled'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidAsset(data) {
+      return hasRequiredFields(['id', 'code', 'name', 'type', 'dateAdded', 'unit', 'quantityAdded', 'quantityReduced', 'quantityRemaining', 'totalValue', 'allocatedAmount', 'remainingAmount', 'inventoryCount', 'history']) &&
+             data.id is string && data.id.size() > 0 &&
+             data.code is string && data.code.size() > 0 &&
+             data.name is string && data.name.size() > 0 &&
+             data.type in ['fixed', 'tool'] &&
+             data.unit is string &&
+             data.quantityAdded is number &&
+             data.quantityReduced is number &&
+             data.quantityRemaining is number &&
+             data.totalValue is number &&
+             data.allocatedAmount is number &&
+             data.remainingAmount is number &&
+             data.inventoryCount is number &&
+             data.history is list;
+    }
+
+    function isValidInventoryLog(data) {
+      return hasRequiredFields(['id', 'date', 'items', 'performedBy']) &&
+             data.id is string &&
+             isValidDateString(data.date) &&
+             data.items is list &&
+             data.performedBy is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
 
     // User profiles
     match /users/{userId} {
       allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow create: if isAuthenticated() && isOwner(userId) && 
-        request.resource.data.role == 'user' && 
-        request.resource.data.status == 'pending';
-      allow update: if isAdmin();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data, userId) && 
+        (
+          (request.resource.data.role == 'user' && request.resource.data.status == 'pending') ||
+          (isAdmin() && request.resource.data.role == 'admin' && request.resource.data.status == 'active')
+        );
+      allow update: if isAdmin() && isValidUser(request.resource.data, userId);
     }
 
     // Assets collection
     match /assets/{assetId} {
       allow read: if isActive();
-      allow write: if isAdmin();
+      allow create: if isAdmin() && isValidAsset(request.resource.data);
+      allow update: if isAdmin() && isValidAsset(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Inventory logs collection
     match /inventoryLogs/{logId} {
       allow read: if isActive();
-      allow write: if isAdmin();
+      allow create: if isAdmin() && isValidInventoryLog(request.resource.data);
+      allow update: if isAdmin() && isValidInventoryLog(request.resource.data);
+      allow delete: if isAdmin();
     }
   }
 }

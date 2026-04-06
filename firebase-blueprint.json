@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user profile information and roles.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique ID of the user." },
+        "email": { "type": "string", "format": "email", "description": "The email address of the user." },
+        "role": { "type": "string", "enum": ["admin", "user"], "description": "The role of the user." },
+        "status": { "type": "string", "enum": ["active", "pending", "disabled"], "description": "The status of the user account." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "The timestamp when the profile was created." }
+      },
+      "required": ["uid", "email", "role", "status", "createdAt"]
+    },
+    "Asset": {
+      "title": "Asset",
+      "description": "Stores information about a fixed asset or tool.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["fixed", "tool"] },
+        "dateAdded": { "type": "string", "format": "date" },
+        "unit": { "type": "string" },
+        "quantityAdded": { "type": "number" },
+        "quantityReduced": { "type": "number" },
+        "quantityRemaining": { "type": "number" },
+        "totalValue": { "type": "number" },
+        "allocatedAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "inventoryCount": { "type": "number" },
+        "notes": { "type": "string" },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "date": { "type": "string", "format": "date-time" },
+              "type": { "type": "string", "enum": ["damage", "repair", "liquidate", "update", "inventory"] },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "liquidatedDate": { "type": "string", "format": "date" }
+      },
+      "required": ["id", "code", "name", "type", "dateAdded", "unit", "quantityAdded", "quantityReduced", "quantityRemaining", "totalValue", "allocatedAmount", "remainingAmount", "inventoryCount", "history"]
+    },
+    "InventoryLog": {
+      "title": "Inventory Log",
+      "description": "Stores logs of inventory checks.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "assetId": { "type": "string" },
+              "assetName": { "type": "string" },
+              "assetCode": { "type": "string" },
+              "status": { "type": "string", "enum": ["ok", "missing", "damaged"] },
+              "note": { "type": "string" }
+            }
+          }
+        },
+        "performedBy": { "type": "string" }
+      },
+      "required": ["id", "date", "items", "performedBy"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles collection."
+    },
+    "/assets/{assetId}": {
+      "schema": "Asset",
+      "description": "Assets collection."
+    },
+    "/inventoryLogs/{logId}": {
+      "schema": "InventoryLog",
+      "description": "Inventory logs collection."
+    }
+  }
+}

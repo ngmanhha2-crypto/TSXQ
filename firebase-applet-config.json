@@ -1,9 +1,10 @@
 {
+  "projectId": "myapp-74eb0",
+  "appId": "1:578095507405:web:a9c4a9906dca321bd00684",
   "apiKey": "AIzaSyDE2LIPsuxhVOTrF62iQcaYde-6dZcWw_U",
   "authDomain": "myapp-74eb0.firebaseapp.com",
-  "projectId": "myapp-74eb0",
+  "firestoreDatabaseId": "ai-studio-ce4b0b4d-6d32-4979-8c6a-60145260afcd",
   "storageBucket": "myapp-74eb0.firebasestorage.app",
   "messagingSenderId": "578095507405",
-  "appId": "1:578095507405:web:cbccf79b63c55ee8d00684",
-  "firestoreDatabaseId": "(default)"
+  "measurementId": ""
 }

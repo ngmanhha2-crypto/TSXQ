@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useMemo, FormEvent, useEffect } from 'react';
+import React, { useState, useMemo, FormEvent, useEffect, Component, ReactNode } from 'react';
 import { 
   Search, 
   Plus, 
@@ -56,130 +56,132 @@ import {
   query, 
   orderBy,
   setDoc,
-  getDoc
+  getDoc,
+  getDocFromServer
 } from 'firebase/firestore';
 
-// Mock data based on the image
-const MOCK_ASSETS: Asset[] = [
-  {
-    id: '1',
-    code: 'BLĐXQ',
-    name: 'Bộ lưu điện 1KVA ( Dùng máy X.Quang DR Gem )',
-    type: 'fixed',
-    dateAdded: '2023-01-04',
-    unit: 'Cái',
-    quantityAdded: 1,
-    quantityReduced: 0,
-    quantityRemaining: 1,
-    totalValue: 15000000,
-    allocatedAmount: 12499995,
-    remainingAmount: 2500005,
-    inventoryCount: 1,
-    notes: '',
-    history: [
-      { id: 'h1', date: '2023-01-04', type: 'update', description: 'Khởi tạo tài sản' }
-    ]
-  },
-  {
-    id: '2',
-    code: 'BMT',
-    name: 'Bộ máy tính xử lý - dùng máy X.quang ( Màn hình, Cây, chuột, bàn phím)',
-    type: 'fixed',
-    dateAdded: '2023-01-04',
-    unit: 'Bộ',
-    quantityAdded: 1,
-    quantityReduced: 0,
-    quantityRemaining: 1,
-    totalValue: 10000000,
-    allocatedAmount: 8333340,
-    remainingAmount: 1666660,
-    inventoryCount: 1,
-    notes: '',
-    history: [
-      { id: 'h2', date: '2023-01-04', type: 'update', description: 'Khởi tạo tài sản' }
-    ]
-  },
-  {
-    id: '3',
-    code: 'BOLUUDIEN.xq',
-    name: 'Bộ lưu điện UPS Santak True Online 3CK LCD',
-    type: 'fixed',
-    dateAdded: '2022-01-27',
-    unit: 'Chiếc',
-    quantityAdded: 1,
-    quantityReduced: 0,
-    quantityRemaining: 1,
-    totalValue: 17600000,
-    allocatedAmount: 14666670,
-    remainingAmount: 2933330,
-    inventoryCount: 1,
-    notes: '',
-    history: [
-      { id: 'h3', date: '2022-01-27', type: 'update', description: 'Khởi tạo tài sản' }
-    ]
-  },
-  {
-    id: '4',
-    code: 'CC224',
-    name: 'Mỏ vịt inox trung',
-    type: 'tool',
-    dateAdded: '2014-12-31',
-    unit: 'Cái',
-    quantityAdded: 2,
-    quantityReduced: 0,
-    quantityRemaining: 2,
-    totalValue: 85714,
-    allocatedAmount: 85714,
-    remainingAmount: 0,
-    inventoryCount: 2,
-    notes: '',
-    history: [
-      { id: 'h4', date: '2014-12-31', type: 'update', description: 'Khởi tạo tài sản' }
-    ]
-  },
-  {
-    id: '5',
-    code: 'CC34-2(sm)',
-    name: 'Quạt Treo Tường',
-    type: 'tool',
-    dateAdded: '2015-09-08',
-    unit: 'Chiếc',
-    quantityAdded: 1,
-    quantityReduced: 0,
-    quantityRemaining: 1,
-    totalValue: 315000,
-    allocatedAmount: 315000,
-    remainingAmount: 0,
-    inventoryCount: 0,
-    notes: 'Đã hỏng',
-    history: [
-      { id: 'h5', date: '2015-09-08', type: 'update', description: 'Khởi tạo tài sản' },
-      { id: 'h6', date: '2024-03-15', type: 'damage', description: 'Phát hiện hỏng hóc' }
-    ]
-  },
-  {
-    id: '6',
-    code: 'DC21- Van',
-    name: 'Điều hòa Panasonic U12TKH',
-    type: 'fixed',
-    dateAdded: '2017-07-23',
-    unit: 'Cái',
-    quantityAdded: 1,
-    quantityReduced: 0,
-    quantityRemaining: 1,
-    totalValue: 11181818,
-    allocatedAmount: 11181818,
-    remainingAmount: 0,
-    inventoryCount: 0,
-    notes: 'Đã hỏng',
-    history: [
-      { id: 'h7', date: '2017-07-23', type: 'update', description: 'Khởi tạo tài sản' },
-      { id: 'h8', date: '2024-02-10', type: 'damage', description: 'Hỏng block máy nén' }
-    ]
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
   }
-];
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    // @ts-ignore
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    // @ts-ignore
+    if (this.state.hasError) {
+      let message = "Đã xảy ra lỗi không mong muốn.";
+      try {
+        // @ts-ignore
+        const firestoreError = JSON.parse(this.state.error?.message || "");
+        if (firestoreError.error.includes("permissions")) {
+          message = "Bạn không có quyền thực hiện thao tác này. Vui lòng kiểm tra trạng thái tài khoản.";
+        }
+      } catch (e) {
+        // Not a firestore error JSON
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+          <div className="max-w-md w-full bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 text-center">
+            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Oops! Có lỗi xảy ra</h2>
+            <p className="text-gray-600 dark:text-gray-400 mb-6">{message}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+            >
+              Tải lại trang
+            </button>
+          </div>
+        </div>
+      );
+    }
+    // @ts-ignore
+    return this.props.children;
+  }
+}
 
 export default function App() {
+  // Test Connection
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration. The client is offline.");
+          setToast({ message: "Lỗi kết nối Firebase. Vui lòng kiểm tra cấu hình.", type: 'error' });
+        }
+      }
+    }
+    testConnection();
+  }, []);
+
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
@@ -245,6 +247,7 @@ export default function App() {
   // User Profile Sync
   useEffect(() => {
     if (!user) return;
+    const path = `users/${user.uid}`;
     const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
       if (snapshot.exists()) {
         setUserProfile(snapshot.data() as UserProfile);
@@ -258,10 +261,12 @@ export default function App() {
             status: 'active',
             createdAt: new Date().toISOString()
           };
-          setDoc(doc(db, 'users', user.uid), initialAdmin);
+          setDoc(doc(db, 'users', user.uid), initialAdmin).catch(e => handleFirestoreError(e, OperationType.WRITE, path));
         }
       }
       setAuthLoading(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, path);
     });
     return () => unsubscribe();
   }, [user]);
@@ -272,10 +277,13 @@ export default function App() {
       setAllUsers([]);
       return;
     }
+    const path = 'users';
     const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const usersData = snapshot.docs.map(doc => doc.data() as UserProfile);
       setAllUsers(usersData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [userProfile]);
@@ -283,10 +291,13 @@ export default function App() {
   // Firestore Sync - Assets
   useEffect(() => {
     if (!user || (userProfile?.status !== 'active' && user.email !== 'ngmanhha2@gmail.com')) return;
+    const path = 'assets';
     const q = query(collection(db, 'assets'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const assetsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Asset));
       setAssets(assetsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user, userProfile]);
@@ -294,10 +305,13 @@ export default function App() {
   // Firestore Sync - Inventory Logs
   useEffect(() => {
     if (!user || (userProfile?.status !== 'active' && user.email !== 'ngmanhha2@gmail.com')) return;
+    const path = 'inventoryLogs';
     const q = query(collection(db, 'inventoryLogs'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryLog));
       setInventoryLogs(logsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, path);
     });
     return () => unsubscribe();
   }, [user, userProfile]);
@@ -318,7 +332,7 @@ export default function App() {
           status: 'pending',
           createdAt: new Date().toISOString()
         };
-        await setDoc(doc(db, 'users', newUser.uid), newProfile);
+        await setDoc(doc(db, 'users', newUser.uid), newProfile).catch(e => handleFirestoreError(e, OperationType.WRITE, `users/${newUser.uid}`));
         await sendEmailVerification(newUser);
         alert('Đã gửi email xác thực. Vui lòng kiểm tra hộp thư của bạn.');
       } else {
@@ -330,11 +344,13 @@ export default function App() {
   };
 
   const handleUpdateUserStatus = async (uid: string, status: 'active' | 'disabled') => {
-    await updateDoc(doc(db, 'users', uid), { status });
+    const path = `users/${uid}`;
+    await updateDoc(doc(db, 'users', uid), { status }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
   };
 
   const handleUpdateUserRole = async (uid: string, role: UserRole) => {
-    await updateDoc(doc(db, 'users', uid), { role });
+    const path = `users/${uid}`;
+    await updateDoc(doc(db, 'users', uid), { role }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
   };
 
   const globalHistory = useMemo(() => {
@@ -398,13 +414,14 @@ export default function App() {
     const asset = assets.find(a => a.id === id);
     if (!asset) return;
     
+    const path = `assets/${id}`;
     await updateDoc(doc(db, 'assets', id), {
       notes: asset.notes.replace(/đã hỏng|hỏng/gi, '').trim(),
       history: [
         ...asset.history,
         { id: Math.random().toString(36).substr(2, 9), date: today, type: 'repair', description: 'Đã sửa chữa và đưa vào sử dụng lại' }
       ]
-    });
+    }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
   };
 
   const handleLiquidate = async (id: string) => {
@@ -413,13 +430,14 @@ export default function App() {
     if (!asset) return;
 
     if (confirm('Bạn có chắc chắn muốn thanh lý tài sản này?')) {
+      const path = `assets/${id}`;
       await updateDoc(doc(db, 'assets', id), {
         liquidatedDate: today,
         history: [
           ...asset.history,
           { id: Math.random().toString(36).substr(2, 9), date: today, type: 'liquidate', description: 'Thanh lý tài sản' }
         ]
-      });
+      }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
     }
   };
 
@@ -455,12 +473,14 @@ export default function App() {
       })
     };
 
-    await addDoc(collection(db, 'inventoryLogs'), newLog);
+    const logPath = 'inventoryLogs';
+    await addDoc(collection(db, 'inventoryLogs'), newLog).catch(e => handleFirestoreError(e, OperationType.CREATE, logPath));
     
     // Update asset history for each item in inventory
     for (const item of currentInventory) {
       const asset = assets.find(a => a.id === item.assetId);
       if (asset) {
+        const assetPath = `assets/${asset.id}`;
         const statusText = item.status === 'ok' ? 'Đủ' : item.status === 'missing' ? 'Thiếu' : 'Hỏng';
         await updateDoc(doc(db, 'assets', asset.id), {
           history: [
@@ -472,7 +492,7 @@ export default function App() {
               description: `Kiểm kê định kỳ: Trạng thái ${statusText}. Ghi chú: ${item.note || 'Không có'}` 
             }
           ]
-        });
+        }).catch(e => handleFirestoreError(e, OperationType.UPDATE, assetPath));
       }
     }
 
@@ -583,11 +603,13 @@ export default function App() {
     }
 
     const { id, ...data } = updatedAsset;
-    await updateDoc(doc(db, 'assets', id), data);
+    const path = `assets/${id}`;
+    await updateDoc(doc(db, 'assets', id), data).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
     setEditingAsset(null);
   };
 
   const handleDeleteAsset = async (id: string) => {
+    const path = `assets/${id}`;
     try {
       await deleteDoc(doc(db, 'assets', id));
       setEditingAsset(null);
@@ -595,15 +617,14 @@ export default function App() {
       setToast({ message: 'Đã xóa tài sản thành công!', type: 'success' });
       setTimeout(() => setToast(null), 3000);
     } catch (error) {
-      console.error('Delete error:', error);
-      setToast({ message: 'Lỗi khi xóa tài sản!', type: 'error' });
-      setTimeout(() => setToast(null), 3000);
+      handleFirestoreError(error, OperationType.DELETE, path);
     }
   };
 
   const handleCreateAsset = async (e: FormEvent) => {
     e.preventDefault();
     const today = new Date().toISOString().split('T')[0];
+    const path = 'assets';
     const newAssetFull: Omit<Asset, 'id'> = {
       ...(newAsset as Asset),
       quantityReduced: 0,
@@ -614,7 +635,7 @@ export default function App() {
       ]
     };
     
-    await addDoc(collection(db, 'assets'), newAssetFull);
+    await addDoc(collection(db, 'assets'), newAssetFull).catch(e => handleFirestoreError(e, OperationType.CREATE, path));
     setIsAddingNew(false);
     setNewAsset({
       type: 'fixed',
@@ -702,15 +723,14 @@ export default function App() {
 
       if (importedAssets.length > 0) {
         try {
+          const path = 'assets';
           // Use Promise.all for faster parallel writes
           await Promise.all(importedAssets.map(asset => addDoc(collection(db, 'assets'), asset)));
           
           setToast({ message: `Đã nhập thành công ${importedAssets.length} tài sản!`, type: 'success' });
           setTimeout(() => setToast(null), 3000);
         } catch (error) {
-          console.error('Import error:', error);
-          setToast({ message: 'Lỗi khi nhập dữ liệu từ Excel!', type: 'error' });
-          setTimeout(() => setToast(null), 3000);
+          handleFirestoreError(error, OperationType.CREATE, 'assets');
         }
       }
     };
@@ -725,100 +745,105 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className={`min-h-screen flex items-center justify-center bg-slate-50 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
-        <Loader2 className="animate-spin text-blue-600" size={48} />
-      </div>
+      <ErrorBoundary>
+        <div className={`min-h-screen flex items-center justify-center bg-slate-50 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
+          <Loader2 className="animate-spin text-blue-600" size={48} />
+        </div>
+      </ErrorBoundary>
     );
   }
 
   if (!user) {
     return (
-      <div className={`min-h-screen flex items-center justify-center bg-slate-50 p-4 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
-        >
-          <div className="mb-8 text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 dark:shadow-blue-900/20">
-              <Package size={32} />
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-              {isRegistering ? 'Đăng ký tài khoản' : 'Đăng nhập hệ thống'}
-            </h1>
-            <p className="mt-2 text-slate-500 dark:text-slate-400">Quản lý tài sản Phòng X-Quang</p>
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-5">
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="email"
-                  required
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
-                  placeholder="name@example.com"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                />
+      <ErrorBoundary>
+        <div className={`min-h-screen flex items-center justify-center bg-slate-50 p-4 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+          >
+            <div className="mb-8 text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 dark:shadow-blue-900/20">
+                <Package size={32} />
               </div>
+              <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+                {isRegistering ? 'Đăng ký tài khoản' : 'Đăng nhập hệ thống'}
+              </h1>
+              <p className="mt-2 text-slate-500 dark:text-slate-400">Quản lý tài sản Phòng X-Quang</p>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Mật khẩu</label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                <input
-                  type="password"
-                  required
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
-                  placeholder="••••••••"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                />
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    type="email"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
+                    placeholder="name@example.com"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                  />
+                </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Mật khẩu</label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    type="password"
+                    required
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
+                    placeholder="••••••••"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {authError && (
+                <div className="flex items-center gap-2 rounded-lg bg-rose-50 p-3 text-xs font-medium text-rose-600 dark:bg-rose-900/20 dark:text-rose-400">
+                  <AlertCircle size={14} />
+                  {authError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 active:scale-[0.98] dark:shadow-blue-900/20"
+              >
+                {isRegistering ? 'Tạo tài khoản' : 'Đăng nhập'}
+              </button>
+            </form>
+
+            <div className="mt-8 text-center">
+              <button
+                onClick={() => setIsRegistering(!isRegistering)}
+                className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+              >
+                {isRegistering ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký ngay'}
+              </button>
             </div>
-
-            {authError && (
-              <div className="flex items-center gap-2 rounded-lg bg-rose-50 p-3 text-xs font-medium text-rose-600 dark:bg-rose-900/20 dark:text-rose-400">
-                <AlertCircle size={14} />
-                {authError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 active:scale-[0.98] dark:shadow-blue-900/20"
-            >
-              {isRegistering ? 'Tạo tài khoản' : 'Đăng nhập'}
-            </button>
-          </form>
-
-          <div className="mt-8 text-center">
-            <button
-              onClick={() => setIsRegistering(!isRegistering)}
-              className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
-            >
-              {isRegistering ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký ngay'}
-            </button>
-          </div>
-          
-          <div className="mt-6 flex justify-center">
-            <button
-              onClick={() => setDarkMode(!darkMode)}
-              className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-            >
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-          </div>
-        </motion.div>
-      </div>
+            
+            <div className="mt-6 flex justify-center">
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              >
+                {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      </ErrorBoundary>
     );
   }
 
   return (
-    <div className={`min-h-screen bg-slate-50 font-sans text-slate-900 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950 dark:text-slate-100`}>
+    <ErrorBoundary>
+      <div className={`min-h-screen bg-slate-50 font-sans text-slate-900 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950 dark:text-slate-100`}>
       {/* Header */}
       <header className="sticky top-0 z-30 w-full border-b border-slate-200 bg-white/80 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/80">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
@@ -2313,6 +2338,7 @@ export default function App() {
           </p>
         </div>
       </footer>
-    </div>
+      </div>
+    </ErrorBoundary>
   );
 }
