@@ -10,19 +10,37 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "ngmanhha2@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isActive() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' ||
+         request.auth.token.email == "ngmanhha2@gmail.com");
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(userId) && 
+        request.resource.data.role == 'user' && 
+        request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+    }
+
     // Assets collection
     match /assets/{assetId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isActive();
+      allow write: if isAdmin();
     }
 
     // Inventory logs collection
     match /inventoryLogs/{logId} {
-      allow read, write: if isAuthenticated();
-    }
-    
-    // User profiles (if needed)
-    match /users/{userId} {
-      allow read, write: if isOwner(userId);
+      allow read: if isActive();
+      allow write: if isAdmin();
     }
   }
 }

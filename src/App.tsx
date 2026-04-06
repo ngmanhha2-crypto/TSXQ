@@ -36,14 +36,15 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
-import { Asset, AssetType, InventoryLog } from './types';
+import { Asset, AssetType, InventoryLog, UserProfile, UserRole } from './types';
 import { auth, db } from './firebase';
 import { 
   onAuthStateChanged, 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signOut,
-  User as FirebaseUser
+  User as FirebaseUser,
+  sendEmailVerification
 } from 'firebase/auth';
 import { 
   collection, 
@@ -54,7 +55,8 @@ import {
   doc, 
   query, 
   orderBy,
-  setDoc
+  setDoc,
+  getDoc
 } from 'firebase/firestore';
 
 // Mock data based on the image
@@ -179,6 +181,8 @@ const MOCK_ASSETS: Asset[] = [
 
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
@@ -193,7 +197,7 @@ export default function App() {
     return false;
   });
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeTab, setActiveTab] = useState<'all' | 'damaged' | 'liquidated' | 'history' | 'inventory'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'damaged' | 'liquidated' | 'history' | 'inventory' | 'users'>('all');
   const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | AssetType>('all');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
@@ -229,39 +233,93 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
-      setAuthLoading(false);
+      if (!user) {
+        setUserProfile(null);
+        setAuthLoading(false);
+      }
     });
     return () => unsubscribe();
   }, []);
 
-  // Firestore Sync - Assets
+  // User Profile Sync
   useEffect(() => {
     if (!user) return;
+    const unsubscribe = onSnapshot(doc(db, 'users', user.uid), (snapshot) => {
+      if (snapshot.exists()) {
+        setUserProfile(snapshot.data() as UserProfile);
+      } else {
+        // If profile doesn't exist, it might be the initial admin or a new user
+        if (user.email === 'ngmanhha2@gmail.com') {
+          const initialAdmin: UserProfile = {
+            uid: user.uid,
+            email: user.email!,
+            role: 'admin',
+            status: 'active',
+            createdAt: new Date().toISOString()
+          };
+          setDoc(doc(db, 'users', user.uid), initialAdmin);
+        }
+      }
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // All Users Sync (Admin only)
+  useEffect(() => {
+    if (userProfile?.role !== 'admin') {
+      setAllUsers([]);
+      return;
+    }
+    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const usersData = snapshot.docs.map(doc => doc.data() as UserProfile);
+      setAllUsers(usersData);
+    });
+    return () => unsubscribe();
+  }, [userProfile]);
+
+  // Firestore Sync - Assets
+  useEffect(() => {
+    if (!user || (userProfile?.status !== 'active' && user.email !== 'ngmanhha2@gmail.com')) return;
     const q = query(collection(db, 'assets'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const assetsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Asset));
       setAssets(assetsData);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, userProfile]);
 
   // Firestore Sync - Inventory Logs
   useEffect(() => {
-    if (!user) return;
+    if (!user || (userProfile?.status !== 'active' && user.email !== 'ngmanhha2@gmail.com')) return;
     const q = query(collection(db, 'inventoryLogs'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryLog));
       setInventoryLogs(logsData);
     });
     return () => unsubscribe();
-  }, [user]);
+  }, [user, userProfile]);
 
   const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     setAuthError('');
     try {
       if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
+        const userCredential = await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
+        const newUser = userCredential.user;
+        
+        // Create pending user profile
+        const newProfile: UserProfile = {
+          uid: newUser.uid,
+          email: newUser.email!,
+          role: 'user',
+          status: 'pending',
+          createdAt: new Date().toISOString()
+        };
+        await setDoc(doc(db, 'users', newUser.uid), newProfile);
+        await sendEmailVerification(newUser);
+        alert('Đã gửi email xác thực. Vui lòng kiểm tra hộp thư của bạn.');
       } else {
         await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
       }
@@ -270,7 +328,13 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => signOut(auth);
+  const handleUpdateUserStatus = async (uid: string, status: 'active' | 'disabled') => {
+    await updateDoc(doc(db, 'users', uid), { status });
+  };
+
+  const handleUpdateUserRole = async (uid: string, role: UserRole) => {
+    await updateDoc(doc(db, 'users', uid), { role });
+  };
 
   const globalHistory = useMemo(() => {
     return assets.flatMap(asset => 
@@ -557,6 +621,18 @@ export default function App() {
     });
   };
 
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+      setUserProfile(null);
+      setAllUsers([]);
+      setActiveTab('all');
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
   const handleDownloadTemplate = () => {
     const templateData = [
       {
@@ -745,9 +821,14 @@ export default function App() {
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
                 <User size={16} className="text-slate-600 dark:text-slate-400" />
               </div>
-              <span className="text-xs font-medium text-slate-600 dark:text-slate-400 max-w-[100px] truncate">
-                {user?.email}
-              </span>
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-slate-900 dark:text-white max-w-[100px] truncate leading-tight">
+                  {user?.email}
+                </span>
+                <span className="text-[10px] font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                  {userProfile?.role === 'admin' ? 'Trưởng phòng' : 'Nhân viên'}
+                </span>
+              </div>
             </div>
             <button
               onClick={() => setDarkMode(!darkMode)}
@@ -791,31 +872,157 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        {/* Stats Grid */}
-        <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: 'Tổng số tài sản', value: stats.count, icon: Package, color: 'text-blue-600', bg: 'bg-blue-50' },
-            { label: 'Tổng giá trị', value: formatCurrency(stats.total), icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-            { label: 'Giá trị còn lại', value: formatCurrency(stats.remaining), icon: History, color: 'text-amber-600', bg: 'bg-amber-50' },
-            { label: 'Tài sản hỏng/giảm', value: stats.damaged, icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
-          ].map((stat, i) => (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-              key={stat.label}
-              className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${stat.bg} ${stat.color} dark:bg-opacity-10`}>
-                <stat.icon size={24} />
-              </div>
+        {userProfile?.status === 'pending' && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-800 dark:border-amber-900/30 dark:bg-amber-900/20 dark:text-amber-400"
+          >
+            <div className="flex items-center gap-3">
+              <AlertCircle size={24} />
               <div>
-                <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{stat.label}</p>
-                <p className="text-xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+                <h3 className="font-bold">Tài khoản đang chờ phê duyệt</h3>
+                <p className="text-sm">Tài khoản của bạn đã được tạo thành công. Vui lòng đợi Trưởng phòng phê duyệt để có thể xem và quản lý tài sản.</p>
               </div>
-            </motion.div>
-          ))}
-        </div>
+            </div>
+          </motion.div>
+        )}
+
+        {userProfile?.status === 'disabled' && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-8 rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-800 dark:border-rose-900/30 dark:bg-rose-900/20 dark:text-rose-400"
+          >
+            <div className="flex items-center gap-3">
+              <Ban size={24} />
+              <div>
+                <h3 className="font-bold">Tài khoản đã bị khóa</h3>
+                <p className="text-sm">Tài khoản của bạn đã bị vô hiệu hóa bởi quản trị viên. Vui lòng liên hệ Trưởng phòng để biết thêm chi tiết.</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {userProfile?.status === 'active' && activeTab === 'users' && userProfile.role === 'admin' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="space-y-6"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Quản lý người dùng</h2>
+              <div className="flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-1 text-xs font-bold text-blue-600 dark:bg-blue-900/20 dark:text-blue-400">
+                <User size={14} />
+                {allUsers.length} Người dùng
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50/50 dark:border-slate-800 dark:bg-slate-800/50">
+                      <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Email</th>
+                      <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vai trò</th>
+                      <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Trạng thái</th>
+                      <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Ngày tạo</th>
+                      <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {allUsers.map((u) => (
+                      <tr key={u.uid} className="transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                              <User size={16} />
+                            </div>
+                            <span className="font-medium text-slate-900 dark:text-white">{u.email}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <select
+                            value={u.role}
+                            disabled={u.email === 'ngmanhha2@gmail.com'}
+                            onChange={(e) => handleUpdateUserRole(u.uid, e.target.value as UserRole)}
+                            className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                          >
+                            <option value="user">Nhân viên</option>
+                            <option value="admin">Trưởng phòng</option>
+                          </select>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                            u.status === 'active' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                            u.status === 'pending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                            'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+                          }`}>
+                            {u.status === 'active' ? 'Hoạt động' : u.status === 'pending' ? 'Chờ duyệt' : 'Đã khóa'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                          {new Date(u.createdAt).toLocaleDateString('vi-VN')}
+                        </td>
+                        <td className="px-6 py-4">
+                          {u.email !== 'ngmanhha2@gmail.com' && (
+                            <div className="flex items-center gap-2">
+                              {u.status === 'pending' || u.status === 'disabled' ? (
+                                <button
+                                  onClick={() => handleUpdateUserStatus(u.uid, 'active')}
+                                  className="flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-600 transition-all hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400"
+                                >
+                                  <CheckCircle2 size={14} />
+                                  Duyệt
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleUpdateUserStatus(u.uid, 'disabled')}
+                                  className="flex items-center gap-1 rounded-lg bg-rose-50 px-3 py-1 text-xs font-bold text-rose-600 transition-all hover:bg-rose-100 dark:bg-rose-900/20 dark:text-rose-400"
+                                >
+                                  <Ban size={14} />
+                                  Khóa
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {userProfile?.status === 'active' && activeTab !== 'users' && (
+          <div key="main-content">
+            {/* Stats Grid */}
+            <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { label: 'Tổng số tài sản', value: stats.count, icon: Package, color: 'text-blue-600', bg: 'bg-blue-50' },
+                { label: 'Tổng giá trị', value: formatCurrency(stats.total), icon: TrendingUp, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+                { label: 'Giá trị còn lại', value: formatCurrency(stats.remaining), icon: History, color: 'text-amber-600', bg: 'bg-amber-50' },
+                { label: 'Tài sản hỏng/giảm', value: stats.damaged, icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+              ].map((stat, i) => (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.1 }}
+                  key={stat.label}
+                  className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-800 dark:bg-slate-900"
+                >
+                  <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${stat.bg} ${stat.color} dark:bg-opacity-10`}>
+                    <stat.icon size={24} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">{stat.label}</p>
+                    <p className="text-xl font-bold text-slate-900 dark:text-white">{stat.value}</p>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
 
         {/* Tabs & Filters */}
         <div className="mb-6 space-y-6">
@@ -926,6 +1133,19 @@ export default function App() {
                 <ClipboardCheck size={16} />
                 Kiểm kê
               </button>
+              {userProfile?.role === 'admin' && (
+                <button
+                  onClick={() => setActiveTab('users')}
+                  className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                    activeTab === 'users' 
+                      ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' 
+                      : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+                  }`}
+                >
+                  <User size={16} />
+                  Người dùng
+                </button>
+              )}
             </div>
           </div>
 
@@ -1417,7 +1637,9 @@ export default function App() {
             </div>
           )}
         </div>
-      </main>
+      </div>
+    )}
+  </main>
 
       {/* Asset Detail Modal */}
       <AnimatePresence>

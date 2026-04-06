@@ -38,3 +38,13 @@ export interface Asset {
 }
 
 export type AssetType = 'fixed' | 'tool';
+
+export type UserRole = 'admin' | 'user';
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  role: UserRole;
+  status: 'active' | 'pending' | 'disabled';
+  createdAt: string;
+}
