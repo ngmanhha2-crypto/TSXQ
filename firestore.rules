@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Assets collection
+    match /assets/{assetId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Inventory logs collection
+    match /inventoryLogs/{logId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // User profiles (if needed)
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+  }
+}

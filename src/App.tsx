@@ -26,11 +26,36 @@ import {
   ClipboardCheck,
   Printer,
   Moon,
-  Sun
+  Sun,
+  LogOut,
+  LogIn,
+  User,
+  Lock,
+  Mail,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { Asset, AssetType, InventoryLog } from './types';
+import { auth, db } from './firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signOut,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { 
+  collection, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  query, 
+  orderBy,
+  setDoc
+} from 'firebase/firestore';
 
 // Mock data based on the image
 const MOCK_ASSETS: Asset[] = [
@@ -153,6 +178,13 @@ const MOCK_ASSETS: Asset[] = [
 ];
 
 export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authError, setAuthError] = useState('');
+
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('darkMode');
@@ -163,7 +195,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeTab, setActiveTab] = useState<'all' | 'damaged' | 'liquidated' | 'history' | 'inventory'>('all');
   const [assetTypeFilter, setAssetTypeFilter] = useState<'all' | AssetType>('all');
-  const [assets, setAssets] = useState<Asset[]>(MOCK_ASSETS);
+  const [assets, setAssets] = useState<Asset[]>([]);
   const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
   const [viewingHistoryAsset, setViewingHistoryAsset] = useState<Asset | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -192,6 +224,53 @@ export default function App() {
     notes: '',
     history: []
   });
+
+  // Auth Effect
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore Sync - Assets
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'assets'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const assetsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Asset));
+      setAssets(assetsData);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Firestore Sync - Inventory Logs
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'inventoryLogs'), orderBy('date', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const logsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as InventoryLog));
+      setInventoryLogs(logsData);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      if (isRegistering) {
+        await createUserWithEmailAndPassword(auth, loginEmail, loginPassword);
+      } else {
+        await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+      }
+    } catch (error: any) {
+      setAuthError(error.message);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
 
   const globalHistory = useMemo(() => {
     return assets.flatMap(asset => 
@@ -249,33 +328,33 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const handleRepair = (id: string) => {
+  const handleRepair = async (id: string) => {
     const today = new Date().toISOString().split('T')[0];
-    setAssets(prev => prev.map(asset => 
-      asset.id === id ? { 
-        ...asset, 
-        notes: asset.notes.replace(/đã hỏng|hỏng/gi, '').trim(),
-        history: [
-          ...asset.history,
-          { id: Math.random().toString(36).substr(2, 9), date: today, type: 'repair', description: 'Đã sửa chữa và đưa vào sử dụng lại' }
-        ]
-      } : asset
-    ));
+    const asset = assets.find(a => a.id === id);
+    if (!asset) return;
+    
+    await updateDoc(doc(db, 'assets', id), {
+      notes: asset.notes.replace(/đã hỏng|hỏng/gi, '').trim(),
+      history: [
+        ...asset.history,
+        { id: Math.random().toString(36).substr(2, 9), date: today, type: 'repair', description: 'Đã sửa chữa và đưa vào sử dụng lại' }
+      ]
+    });
   };
 
-  const handleLiquidate = (id: string) => {
+  const handleLiquidate = async (id: string) => {
     const today = new Date().toISOString().split('T')[0];
+    const asset = assets.find(a => a.id === id);
+    if (!asset) return;
+
     if (confirm('Bạn có chắc chắn muốn thanh lý tài sản này?')) {
-      setAssets(prev => prev.map(asset => 
-        asset.id === id ? { 
-          ...asset, 
-          liquidatedDate: today,
-          history: [
-            ...asset.history,
-            { id: Math.random().toString(36).substr(2, 9), date: today, type: 'liquidate', description: 'Thanh lý tài sản' }
-          ]
-        } : asset
-      ));
+      await updateDoc(doc(db, 'assets', id), {
+        liquidatedDate: today,
+        history: [
+          ...asset.history,
+          { id: Math.random().toString(36).substr(2, 9), date: today, type: 'liquidate', description: 'Thanh lý tài sản' }
+        ]
+      });
     }
   };
 
@@ -295,11 +374,10 @@ export default function App() {
     ));
   };
 
-  const finishInventory = () => {
-    const newLog: InventoryLog = {
-      id: Math.random().toString(36).substr(2, 9),
+  const finishInventory = async () => {
+    const newLog: Omit<InventoryLog, 'id'> = {
       date: inventoryDate,
-      performedBy: 'Admin',
+      performedBy: user?.email || 'Admin',
       items: currentInventory.map(item => {
         const asset = assets.find(a => a.id === item.assetId);
         return {
@@ -312,28 +390,26 @@ export default function App() {
       })
     };
 
-    setInventoryLogs(prev => [...prev, newLog]);
+    await addDoc(collection(db, 'inventoryLogs'), newLog);
     
     // Update asset history for each item in inventory
-    setAssets(prev => prev.map(asset => {
-      const invItem = currentInventory.find(i => i.assetId === asset.id);
-      if (invItem) {
-        const statusText = invItem.status === 'ok' ? 'Đủ' : invItem.status === 'missing' ? 'Thiếu' : 'Hỏng';
-        return {
-          ...asset,
+    for (const item of currentInventory) {
+      const asset = assets.find(a => a.id === item.assetId);
+      if (asset) {
+        const statusText = item.status === 'ok' ? 'Đủ' : item.status === 'missing' ? 'Thiếu' : 'Hỏng';
+        await updateDoc(doc(db, 'assets', asset.id), {
           history: [
             ...asset.history,
             { 
               id: Math.random().toString(36).substr(2, 9), 
               date: inventoryDate, 
               type: 'inventory', 
-              description: `Kiểm kê định kỳ: Trạng thái ${statusText}. Ghi chú: ${invItem.note || 'Không có'}` 
+              description: `Kiểm kê định kỳ: Trạng thái ${statusText}. Ghi chú: ${item.note || 'Không có'}` 
             }
           ]
-        };
+        });
       }
-      return asset;
-    }));
+    }
 
     setIsInventorying(false);
     alert('Đã lưu kết quả kiểm kê vào nhật ký hệ thống!');
@@ -420,7 +496,7 @@ export default function App() {
     printWindow.document.close();
   };
 
-  const handleSaveEdit = (e: FormEvent) => {
+  const handleSaveEdit = async (e: FormEvent) => {
     e.preventDefault();
     if (!editingAsset) return;
     
@@ -441,25 +517,22 @@ export default function App() {
       ];
     }
 
-    setAssets(prev => prev.map(asset => 
-      asset.id === editingAsset.id ? updatedAsset : asset
-    ));
+    const { id, ...data } = updatedAsset;
+    await updateDoc(doc(db, 'assets', id), data);
     setEditingAsset(null);
   };
 
-  const handleDeleteAsset = (id: string) => {
-    setAssets(prev => prev.filter(asset => asset.id !== id));
+  const handleDeleteAsset = async (id: string) => {
+    await deleteDoc(doc(db, 'assets', id));
     setEditingAsset(null);
     setIsConfirmingDelete(null);
   };
 
-  const handleCreateAsset = (e: FormEvent) => {
+  const handleCreateAsset = async (e: FormEvent) => {
     e.preventDefault();
-    const id = Math.random().toString(36).substr(2, 9);
     const today = new Date().toISOString().split('T')[0];
-    const newAssetFull: Asset = {
+    const newAssetFull: Omit<Asset, 'id'> = {
       ...(newAsset as Asset),
-      id,
       quantityReduced: 0,
       allocatedAmount: 0,
       inventoryCount: 1,
@@ -467,7 +540,8 @@ export default function App() {
         { id: Math.random().toString(36).substr(2, 9), date: today, type: 'update', description: 'Khởi tạo tài sản mới' }
       ]
     };
-    setAssets(prev => [...prev, newAssetFull]);
+    
+    await addDoc(collection(db, 'assets'), newAssetFull);
     setIsAddingNew(false);
     setNewAsset({
       type: 'fixed',
@@ -508,7 +582,7 @@ export default function App() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const data = new Uint8Array(event.target?.result as ArrayBuffer);
       const workbook = XLSX.read(data, { type: 'array' });
       const firstSheetName = workbook.SheetNames[0];
@@ -516,13 +590,12 @@ export default function App() {
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
       const today = new Date().toISOString().split('T')[0];
-      const importedAssets: Asset[] = jsonData.map((row: any) => {
+      const importedAssets = jsonData.map((row: any) => {
         const totalValue = Number(row['Tổng giá trị'] || row['Giá trị gốc'] || 0);
         const allocatedAmount = Number(row['Giá trị đã phân bổ'] || row['Đã phân bổ'] || 0);
         const quantity = Number(row['Số lượng'] || row['SL'] || 1);
         
         return {
-          id: Math.random().toString(36).substr(2, 9),
           code: String(row['Mã tài sản'] || row['Mã'] || ''),
           name: String(row['Tên tài sản'] || row['Tên'] || 'Tài sản không tên'),
           type: (String(row['Phân loại'] || '').toLowerCase().includes('cố định') || String(row['Loại'] || '').toLowerCase().includes('fixed')) ? 'fixed' : 'tool',
@@ -543,7 +616,9 @@ export default function App() {
       });
 
       if (importedAssets.length > 0) {
-        setAssets(prev => [...prev, ...importedAssets]);
+        for (const asset of importedAssets) {
+          await addDoc(collection(db, 'assets'), asset);
+        }
         alert(`Đã nhập thành công ${importedAssets.length} tài sản!`);
       }
     };
@@ -555,6 +630,100 @@ export default function App() {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
   };
+
+  if (authLoading) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center bg-slate-50 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
+        <Loader2 className="animate-spin text-blue-600" size={48} />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center bg-slate-50 p-4 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950`}>
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+        >
+          <div className="mb-8 text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200 dark:shadow-blue-900/20">
+              <Package size={32} />
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+              {isRegistering ? 'Đăng ký tài khoản' : 'Đăng nhập hệ thống'}
+            </h1>
+            <p className="mt-2 text-slate-500 dark:text-slate-400">Quản lý tài sản Phòng X-Quang</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Email</label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  type="email"
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
+                  placeholder="name@example.com"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-bold text-slate-700 dark:text-slate-300">Mật khẩu</label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input
+                  type="password"
+                  required
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 text-sm outline-none transition-all focus:border-blue-500 focus:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-blue-500"
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {authError && (
+              <div className="flex items-center gap-2 rounded-lg bg-rose-50 p-3 text-xs font-medium text-rose-600 dark:bg-rose-900/20 dark:text-rose-400">
+                <AlertCircle size={14} />
+                {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full rounded-xl bg-blue-600 py-3 font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 active:scale-[0.98] dark:shadow-blue-900/20"
+            >
+              {isRegistering ? 'Tạo tài khoản' : 'Đăng nhập'}
+            </button>
+          </form>
+
+          <div className="mt-8 text-center">
+            <button
+              onClick={() => setIsRegistering(!isRegistering)}
+              className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+            >
+              {isRegistering ? 'Đã có tài khoản? Đăng nhập' : 'Chưa có tài khoản? Đăng ký ngay'}
+            </button>
+          </div>
+          
+          <div className="mt-6 flex justify-center">
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+            >
+              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen bg-slate-50 font-sans text-slate-900 transition-colors duration-300 ${darkMode ? 'dark' : ''} dark:bg-slate-950 dark:text-slate-100`}>
@@ -572,12 +741,27 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-1 sm:gap-2">
+            <div className="hidden items-center gap-2 mr-2 sm:flex">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800">
+                <User size={16} className="text-slate-600 dark:text-slate-400" />
+              </div>
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-400 max-w-[100px] truncate">
+                {user?.email}
+              </span>
+            </div>
             <button
               onClick={() => setDarkMode(!darkMode)}
               className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
               title={darkMode ? "Chuyển sang chế độ sáng" : "Chuyển sang chế độ tối"}
             >
               {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-rose-600 transition-all hover:bg-rose-50 dark:border-slate-700 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-900/20"
+              title="Đăng xuất"
+            >
+              <LogOut size={18} />
             </button>
             <div className="hidden items-center gap-1 sm:flex">
               <button 
