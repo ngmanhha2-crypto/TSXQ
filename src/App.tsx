@@ -588,13 +588,10 @@ export default function App() {
   };
 
   const handleDeleteAsset = async (id: string) => {
-    setIsConfirmingDelete(null);
     try {
       await deleteDoc(doc(db, 'assets', id));
       setEditingAsset(null);
-      setSelectedAsset(null);
-      setViewingHistoryAsset(null);
-      setActiveTab('all');
+      setIsConfirmingDelete(null);
       setToast({ message: 'Đã xóa tài sản thành công!', type: 'success' });
       setTimeout(() => setToast(null), 3000);
     } catch (error) {
