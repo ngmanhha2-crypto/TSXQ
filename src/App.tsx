@@ -206,6 +206,7 @@ export default function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Inventory State
   const [inventoryLogs, setInventoryLogs] = useState<InventoryLog[]>([]);
@@ -587,9 +588,20 @@ export default function App() {
   };
 
   const handleDeleteAsset = async (id: string) => {
-    await deleteDoc(doc(db, 'assets', id));
-    setEditingAsset(null);
     setIsConfirmingDelete(null);
+    try {
+      await deleteDoc(doc(db, 'assets', id));
+      setEditingAsset(null);
+      setSelectedAsset(null);
+      setViewingHistoryAsset(null);
+      setActiveTab('all');
+      setToast({ message: 'Đã xóa tài sản thành công!', type: 'success' });
+      setTimeout(() => setToast(null), 3000);
+    } catch (error) {
+      console.error('Delete error:', error);
+      setToast({ message: 'Lỗi khi xóa tài sản!', type: 'error' });
+      setTimeout(() => setToast(null), 3000);
+    }
   };
 
   const handleCreateAsset = async (e: FormEvent) => {
@@ -692,10 +704,17 @@ export default function App() {
       });
 
       if (importedAssets.length > 0) {
-        for (const asset of importedAssets) {
-          await addDoc(collection(db, 'assets'), asset);
+        try {
+          // Use Promise.all for faster parallel writes
+          await Promise.all(importedAssets.map(asset => addDoc(collection(db, 'assets'), asset)));
+          
+          setToast({ message: `Đã nhập thành công ${importedAssets.length} tài sản!`, type: 'success' });
+          setTimeout(() => setToast(null), 3000);
+        } catch (error) {
+          console.error('Import error:', error);
+          setToast({ message: 'Lỗi khi nhập dữ liệu từ Excel!', type: 'error' });
+          setTimeout(() => setToast(null), 3000);
         }
-        alert(`Đã nhập thành công ${importedAssets.length} tài sản!`);
       }
     };
     reader.readAsArrayBuffer(file);
@@ -2265,6 +2284,23 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 50, x: '-50%' }}
+            className={`fixed bottom-8 left-1/2 z-[100] flex items-center gap-2 rounded-xl px-6 py-3 font-bold text-white shadow-2xl ${
+              toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+            }`}
+          >
+            {toast.type === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+            {toast.message}
+          </motion.div>
         )}
       </AnimatePresence>
 
