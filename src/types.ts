@@ -35,6 +35,7 @@ export interface Asset {
   notes: string;
   history: HistoryEntry[];
   liquidatedDate?: string;
+  transferredDate?: string;
 }
 
 export type AssetType = 'fixed' | 'tool';

@@ -33,7 +33,10 @@ import {
   Lock,
   Mail,
   Loader2,
-  ArrowLeft
+  ArrowLeft,
+  ArrowRight,
+  Settings2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
@@ -210,6 +213,12 @@ export default function App() {
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState<string | null>(null);
   const [isConfirmingDeleteAll, setIsConfirmingDeleteAll] = useState(false);
+  const [statusUpdateAsset, setStatusUpdateAsset] = useState<Asset | null>(null);
+  const [statusUpdateType, setStatusUpdateType] = useState<'damage' | 'repair' | 'liquidate' | 'transfer'>('damage');
+  const [statusUpdateDate, setStatusUpdateDate] = useState(new Date().toISOString().split('T')[0]);
+  const [statusUpdateNote, setStatusUpdateNote] = useState('');
+  const [updateAssetNotes, setUpdateAssetNotes] = useState(true);
+  const [historySearch, setHistorySearch] = useState('');
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -358,10 +367,24 @@ export default function App() {
   };
 
   const globalHistory = useMemo(() => {
-    return assets.flatMap(asset => 
+    const allHistory = assets.flatMap(asset => 
       asset.history.map(h => ({ ...h, assetName: asset.name, assetCode: asset.code }))
-    ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [assets]);
+    );
+    const sorted = allHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    
+    if (!historySearch.trim()) return sorted;
+    
+    const searchLower = historySearch.toLowerCase();
+    return sorted.filter(entry => 
+      entry.assetName.toLowerCase().includes(searchLower) ||
+      entry.assetCode.toLowerCase().includes(searchLower) ||
+      entry.description.toLowerCase().includes(searchLower) ||
+      (entry.type === 'damage' && 'báo hỏng'.includes(searchLower)) ||
+      (entry.type === 'repair' && 'sửa chữa'.includes(searchLower)) ||
+      (entry.type === 'liquidate' && 'thanh lý'.includes(searchLower)) ||
+      (entry.type === 'update' && 'cập nhật'.includes(searchLower))
+    );
+  }, [assets, historySearch]);
 
   const searchSuggestions = useMemo(() => {
     if (searchTerm.length < 2) return [];
@@ -375,11 +398,11 @@ export default function App() {
     let result = assets;
     
     if (activeTab === 'damaged') {
-      result = result.filter(asset => asset.notes.toLowerCase().includes('hỏng') && !asset.liquidatedDate);
+      result = result.filter(asset => asset.notes.toLowerCase().includes('hỏng') && !asset.liquidatedDate && !asset.transferredDate);
     } else if (activeTab === 'liquidated') {
-      result = result.filter(asset => !!asset.liquidatedDate);
+      result = result.filter(asset => !!asset.liquidatedDate || !!asset.transferredDate);
     } else {
-      result = result.filter(asset => !asset.liquidatedDate);
+      result = result.filter(asset => !asset.liquidatedDate && !asset.transferredDate);
     }
 
     if (assetTypeFilter !== 'all') {
@@ -393,14 +416,14 @@ export default function App() {
   }, [assets, searchTerm, activeTab, assetTypeFilter]);
 
   const stats = useMemo(() => {
-    const activeAssets = assets.filter(a => !a.liquidatedDate);
+    const activeAssets = assets.filter(a => !a.liquidatedDate && !a.transferredDate);
     const total = activeAssets.reduce((acc, curr) => acc + curr.totalValue, 0);
     const remaining = activeAssets.reduce((acc, curr) => acc + curr.remainingAmount, 0);
     const count = activeAssets.length;
     const damaged = activeAssets.filter(a => a.notes.toLowerCase().includes('hỏng')).length;
     const fixedCount = activeAssets.filter(a => a.type === 'fixed').length;
     const toolCount = activeAssets.filter(a => a.type === 'tool').length;
-    const liquidatedCount = assets.filter(a => !!a.liquidatedDate).length;
+    const liquidatedCount = assets.filter(a => !!a.liquidatedDate || !!a.transferredDate).length;
     return { total, remaining, count, damaged, fixedCount, toolCount, liquidatedCount };
   }, [assets]);
 
@@ -413,42 +436,58 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const handleRepair = async (id: string) => {
-    const today = new Date().toISOString().split('T')[0];
-    const asset = assets.find(a => a.id === id);
-    if (!asset) return;
-    
+  const handleStatusUpdate = async () => {
+    if (!statusUpdateAsset) return;
+    const id = statusUpdateAsset.id;
     const path = `assets/${id}`;
-    await updateDoc(doc(db, 'assets', id), {
-      notes: asset.notes.replace(/đã hỏng|hỏng/gi, '').trim(),
-      history: [
-        ...asset.history,
-        { id: Math.random().toString(36).substr(2, 9), date: today, type: 'repair', description: 'Đã sửa chữa và đưa vào sử dụng lại' }
-      ]
-    }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
-  };
-
-  const handleLiquidate = async (id: string) => {
-    const today = new Date().toISOString().split('T')[0];
-    const asset = assets.find(a => a.id === id);
-    if (!asset) return;
-
-    if (confirm('Bạn có chắc chắn muốn thanh lý tài sản này?')) {
-      const path = `assets/${id}`;
-      await updateDoc(doc(db, 'assets', id), {
-        liquidatedDate: today,
-        history: [
-          ...asset.history,
-          { id: Math.random().toString(36).substr(2, 9), date: today, type: 'liquidate', description: 'Thanh lý tài sản' }
-        ]
-      }).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
+    
+    let description = statusUpdateNote;
+    if (!description) {
+      if (statusUpdateType === 'damage') description = 'Báo hỏng tài sản';
+      if (statusUpdateType === 'repair') description = 'Đã sửa chữa và đưa vào sử dụng lại';
+      if (statusUpdateType === 'liquidate') description = 'Thanh lý tài sản';
+      if (statusUpdateType === 'transfer') description = 'Chuyển đi / Điều chuyển tài sản';
     }
+
+    let updateData: any = {
+      history: [
+        ...statusUpdateAsset.history,
+        { 
+          id: Math.random().toString(36).substr(2, 9), 
+          date: statusUpdateDate, 
+          type: statusUpdateType === 'transfer' ? 'update' : statusUpdateType, 
+          description 
+        }
+      ]
+    };
+
+    if (statusUpdateType === 'liquidate') {
+      updateData.liquidatedDate = statusUpdateDate;
+    } else if (statusUpdateType === 'transfer') {
+      updateData.transferredDate = statusUpdateDate;
+    } else if (statusUpdateType === 'damage') {
+      if (!statusUpdateAsset.notes.toLowerCase().includes('hỏng')) {
+        updateData.notes = statusUpdateAsset.notes ? `${statusUpdateAsset.notes}, hỏng` : 'hỏng';
+      }
+    } else if (statusUpdateType === 'repair') {
+      updateData.notes = statusUpdateAsset.notes.replace(/đã hỏng|hỏng/gi, '').trim();
+    }
+
+    if (updateAssetNotes && statusUpdateNote) {
+      const currentNotes = updateData.notes || statusUpdateAsset.notes;
+      updateData.notes = currentNotes ? `${currentNotes}\n[${statusUpdateDate}] ${statusUpdateNote}` : `[${statusUpdateDate}] ${statusUpdateNote}`;
+    }
+
+    await updateDoc(doc(db, 'assets', id), updateData).catch(e => handleFirestoreError(e, OperationType.UPDATE, path));
+    setStatusUpdateAsset(null);
+    setStatusUpdateNote('');
+    setStatusUpdateDate(new Date().toISOString().split('T')[0]);
   };
 
   const startInventory = () => {
     setIsInventorying(true);
     setInventoryDate(new Date().toISOString().split('T')[0]);
-    setCurrentInventory(assets.filter(a => !a.liquidatedDate).map(a => ({
+    setCurrentInventory(assets.filter(a => !a.liquidatedDate && !a.transferredDate).map(a => ({
       assetId: a.id,
       status: 'ok',
       note: ''
@@ -1044,7 +1083,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <main className="mx-auto w-full max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         {userProfile?.status === 'pending' && (
           <motion.div 
             initial={{ opacity: 0, y: -20 }}
@@ -1207,57 +1246,63 @@ export default function App() {
             </div>
 
         {/* Tabs & Filters */}
-        <div className="mb-6 space-y-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 no-scrollbar dark:bg-slate-900">
+        <div className="mb-8 space-y-4">
+          {/* Row 1: Asset Categories */}
+          <div className="space-y-2">
+            <p className="px-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">Phân loại tài sản</p>
+            <div className="flex items-center gap-1 overflow-x-auto rounded-2xl bg-slate-100/80 p-1.5 no-scrollbar dark:bg-slate-900/50 border border-slate-200/50 dark:border-slate-800/50 w-fit">
               <button
                 onClick={() => setAssetTypeFilter('all')}
-                className={`whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   assetTypeFilter === 'all' 
-                    ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' 
+                    ? 'bg-white text-blue-600 shadow-md shadow-blue-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-blue-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
-                Tất cả
+                Tất cả tài sản
               </button>
               <button
                 onClick={() => setAssetTypeFilter('fixed')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   assetTypeFilter === 'fixed' 
-                    ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' 
+                    ? 'bg-white text-blue-600 shadow-md shadow-blue-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-blue-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 Tài sản cố định
-                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
-                  assetTypeFilter === 'fixed' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black ${
+                  assetTypeFilter === 'fixed' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500'
                 }`}>
                   {stats.fixedCount}
                 </span>
               </button>
               <button
                 onClick={() => setAssetTypeFilter('tool')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   assetTypeFilter === 'tool' 
-                    ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' 
+                    ? 'bg-white text-blue-600 shadow-md shadow-blue-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-blue-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 Công cụ dụng cụ
-                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${
-                  assetTypeFilter === 'tool' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black ${
+                  assetTypeFilter === 'tool' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500 dark:bg-slate-800 dark:text-slate-500'
                 }`}>
                   {stats.toolCount}
                 </span>
               </button>
             </div>
+          </div>
 
-            <div className="flex items-center gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 no-scrollbar dark:bg-slate-900">
+          {/* Row 2: Status & Management */}
+          <div className="space-y-2">
+            <p className="px-1 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 dark:text-slate-500">Trạng thái & Quản lý</p>
+            <div className="flex items-center gap-1 overflow-x-auto rounded-2xl bg-slate-100/80 p-1.5 no-scrollbar dark:bg-slate-900/50 border border-slate-200/50 dark:border-slate-800/50 w-fit max-w-full">
               <button
                 onClick={() => setActiveTab('all')}
-                className={`whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   activeTab === 'all' 
-                    ? 'bg-white text-slate-700 shadow-sm dark:bg-slate-800 dark:text-slate-200' 
+                    ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
@@ -1265,39 +1310,40 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('damaged')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   activeTab === 'damaged' 
-                    ? 'bg-white text-rose-600 shadow-sm dark:bg-slate-800 dark:text-rose-400' 
+                    ? 'bg-white text-rose-600 shadow-md shadow-rose-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-rose-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 Hư hỏng
                 {stats.damaged > 0 && (
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-100 text-[10px] text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-[10px] font-black text-white">
                     {stats.damaged}
                   </span>
                 )}
               </button>
               <button
                 onClick={() => setActiveTab('liquidated')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   activeTab === 'liquidated' 
-                    ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-slate-200' 
+                    ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
-                Đã thanh lý
+                Thanh lý / Chuyển đi
                 {stats.liquidatedCount > 0 && (
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[10px] text-slate-700 dark:bg-slate-700 dark:text-slate-300">
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[10px] font-black text-white dark:bg-slate-700">
                     {stats.liquidatedCount}
                   </span>
                 )}
               </button>
+              <div className="mx-2 h-6 w-px bg-slate-200 dark:bg-slate-800" />
               <button
                 onClick={() => setActiveTab('history')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   activeTab === 'history' 
-                    ? 'bg-white text-amber-600 shadow-sm dark:bg-slate-800 dark:text-amber-400' 
+                    ? 'bg-white text-amber-600 shadow-md shadow-amber-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-amber-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
@@ -1306,9 +1352,9 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('inventory')}
-                className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                   activeTab === 'inventory' 
-                    ? 'bg-white text-indigo-600 shadow-sm dark:bg-slate-800 dark:text-indigo-400' 
+                    ? 'bg-white text-indigo-600 shadow-md shadow-indigo-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-indigo-400 dark:shadow-none dark:ring-slate-700' 
                     : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
@@ -1318,9 +1364,9 @@ export default function App() {
               {userProfile?.role === 'admin' && (
                 <button
                   onClick={() => setActiveTab('users')}
-                  className={`flex items-center gap-2 whitespace-nowrap px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                  className={`flex items-center gap-2 whitespace-nowrap px-5 py-2.5 text-xs sm:text-sm font-bold rounded-xl transition-all duration-200 ${
                     activeTab === 'users' 
-                      ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-800 dark:text-blue-400' 
+                      ? 'bg-white text-blue-600 shadow-md shadow-blue-100/50 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-blue-400 dark:shadow-none dark:ring-slate-700' 
                       : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
                   }`}
                 >
@@ -1570,9 +1616,21 @@ export default function App() {
             </div>
           ) : activeTab === 'history' ? (
             <div className="p-6">
-              <div className="mb-6 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nhật ký hoạt động hệ thống</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400">Tổng cộng {globalHistory.length} bản ghi</p>
+              <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-white">Nhật ký hoạt động hệ thống</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">Tổng cộng {globalHistory.length} bản ghi</p>
+                </div>
+                <div className="relative w-full md:w-72">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                  <input
+                    type="text"
+                    placeholder="Tìm kiếm nhật ký..."
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 dark:border-slate-800 dark:bg-slate-900 dark:text-white"
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                  />
+                </div>
               </div>
               <div className="space-y-4">
                 {globalHistory.map((entry) => (
@@ -1621,11 +1679,8 @@ export default function App() {
                   <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-center dark:text-slate-300">Ngày bắt đầu</th>
                   <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-center dark:text-slate-300">ĐVT</th>
                   <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-center dark:text-slate-300">SL</th>
-                  <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-right dark:text-slate-300">Tổng giá trị</th>
                   <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-right dark:text-slate-300">Số còn lại</th>
-                  <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 text-center dark:text-slate-300">Lịch sử</th>
                   <th className="whitespace-nowrap px-6 py-4 font-semibold text-slate-700 dark:text-slate-300">Ghi chú</th>
-                  <th className="px-6 py-4 font-semibold text-slate-700 text-right dark:text-slate-300">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1645,7 +1700,13 @@ export default function App() {
                           onClick={() => setSelectedAsset(asset)}
                           className="flex flex-col text-left group/name"
                         >
-                          <span className="font-medium text-slate-900 line-clamp-2 group-hover/name:text-blue-600 transition-colors underline-offset-2 hover:underline dark:text-slate-200 dark:group-hover/name:text-blue-400">{asset.name}</span>
+                          <span className={`font-medium line-clamp-2 group-hover/name:text-blue-600 transition-colors underline-offset-2 hover:underline dark:group-hover/name:text-blue-400 ${
+                            asset.notes.toLowerCase().includes('hỏng') && !asset.liquidatedDate && !asset.transferredDate
+                              ? 'text-rose-600 dark:text-rose-400' 
+                              : 'text-slate-900 dark:text-slate-200'
+                          }`}>
+                            {asset.name}
+                          </span>
                         </button>
                       </td>
                       <td className="px-6 py-4 text-center">
@@ -1671,20 +1732,8 @@ export default function App() {
                       <td className="px-6 py-4 text-center font-semibold text-slate-900 dark:text-slate-200">
                         {asset.quantityRemaining}
                       </td>
-                      <td className="px-6 py-4 text-right font-medium text-slate-900 dark:text-slate-200">
-                        {formatCurrency(asset.totalValue)}
-                      </td>
                       <td className="px-6 py-4 text-right font-bold text-emerald-600 dark:text-emerald-400">
                         {formatCurrency(asset.remainingAmount)}
-                      </td>
-                      <td className="px-6 py-4 text-center">
-                        <button 
-                          onClick={() => setViewingHistoryAsset(asset)}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-bold text-slate-600 transition-all hover:bg-blue-50 hover:text-blue-600 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-blue-900/30 dark:hover:text-blue-400"
-                        >
-                          <History size={14} />
-                          Lịch sử ({asset.history.length})
-                        </button>
                       </td>
                       <td className="px-6 py-4">
                         {asset.notes && (
@@ -1693,41 +1742,6 @@ export default function App() {
                             {asset.notes}
                           </span>
                         )}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          {!asset.liquidatedDate && (
-                            <>
-                              <button 
-                                onClick={() => setEditingAsset(asset)}
-                                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:text-slate-500 dark:hover:bg-blue-900/30 dark:hover:text-blue-400"
-                                title="Chỉnh sửa"
-                              >
-                                <Edit2 size={16} />
-                              </button>
-                              {asset.notes.toLowerCase().includes('hỏng') ? (
-                                <button 
-                                  onClick={() => handleRepair(asset.id)}
-                                  className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-600 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
-                                  title="Đánh dấu đã sửa chữa"
-                                >
-                                  Sửa chữa
-                                </button>
-                              ) : (
-                                <button 
-                                  onClick={() => handleLiquidate(asset.id)}
-                                  className="rounded-lg bg-rose-50 px-2 py-1 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-100 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50"
-                                  title="Thanh lý"
-                                >
-                                  Thanh lý
-                                </button>
-                              )}
-                            </>
-                          )}
-                          {asset.liquidatedDate && (
-                            <span className="text-xs font-bold text-slate-400 uppercase dark:text-slate-500">Đã thanh lý</span>
-                          )}
-                        </div>
                       </td>
                     </motion.tr>
                   ))}
@@ -1752,54 +1766,36 @@ export default function App() {
                     </div>
                     <h3 
                       onClick={() => setSelectedAsset(asset)}
-                      className="font-bold text-slate-900 leading-tight cursor-pointer hover:text-blue-600"
+                      className={`font-bold leading-tight cursor-pointer hover:text-blue-600 ${
+                        asset.notes.toLowerCase().includes('hỏng') && !asset.liquidatedDate && !asset.transferredDate
+                          ? 'text-rose-600' 
+                          : 'text-slate-900'
+                      }`}
                     >
                       {asset.name}
                     </h3>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
+                  <div className="flex flex-col items-end gap-1">
                     <span className="text-sm font-bold text-emerald-600">{formatCurrency(asset.remainingAmount)}</span>
-                    <div className="flex gap-1">
-                      {!asset.liquidatedDate && (
-                        <>
-                          <button 
-                            onClick={() => setEditingAsset(asset)}
-                            className="rounded-lg p-2 text-slate-400 bg-slate-50 hover:text-blue-600"
-                          >
-                            <Edit2 size={16} />
-                          </button>
-                          {asset.notes.toLowerCase().includes('hỏng') ? (
-                            <button 
-                              onClick={() => handleRepair(asset.id)}
-                              className="rounded-lg bg-emerald-50 p-2 text-emerald-600"
-                            >
-                              <Wrench size={16} />
-                            </button>
-                          ) : (
-                            <button 
-                              onClick={() => handleLiquidate(asset.id)}
-                              className="rounded-lg bg-rose-50 p-2 text-rose-600"
-                            >
-                              <Ban size={16} />
-                            </button>
-                          )}
-                        </>
-                      )}
-                    </div>
+                    {(asset.liquidatedDate || asset.transferredDate) && (
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">
+                        {asset.liquidatedDate ? 'Đã thanh lý' : 'Đã chuyển đi'}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center justify-between text-xs text-slate-500">
+                <div 
+                  onClick={() => setSelectedAsset(asset)}
+                  className="flex items-center justify-between text-xs text-slate-500 cursor-pointer"
+                >
                   <div className="flex items-center gap-3">
                     <span>SL: <span className="font-bold text-slate-900">{asset.quantityRemaining}</span></span>
                     <span>ĐVT: <span className="font-medium text-slate-700">{asset.unit}</span></span>
                   </div>
-                  <button 
-                    onClick={() => setViewingHistoryAsset(asset)}
-                    className="flex items-center gap-1 font-bold text-blue-600"
-                  >
+                  <div className="flex items-center gap-1 font-bold text-blue-600">
                     <History size={12} />
-                    Lịch sử ({asset.history.length})
-                  </button>
+                    {asset.history.length}
+                  </div>
                 </div>
                 {asset.notes && (
                   <div className="flex items-center gap-1.5 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-600">
@@ -1894,19 +1890,40 @@ export default function App() {
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Trạng thái</p>
                     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${
                       selectedAsset.liquidatedDate ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' :
+                      selectedAsset.transferredDate ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400' :
                       selectedAsset.notes.toLowerCase().includes('hỏng') ? 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400' :
                       'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
                     }`}>
                       <div className={`h-1.5 w-1.5 rounded-full ${
                         selectedAsset.liquidatedDate ? 'bg-slate-400 dark:bg-slate-500' :
+                        selectedAsset.transferredDate ? 'bg-amber-500' :
                         selectedAsset.notes.toLowerCase().includes('hỏng') ? 'bg-rose-500' :
                         'bg-emerald-500'
                       }`} />
                       {selectedAsset.liquidatedDate ? 'Đã thanh lý' :
+                       selectedAsset.transferredDate ? 'Đã chuyển đi' :
                        selectedAsset.notes.toLowerCase().includes('hỏng') ? 'Đang hỏng' :
                        'Đang hoạt động'}
                     </span>
                   </div>
+                  {selectedAsset.liquidatedDate && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Ngày thanh lý</p>
+                      <p className="text-sm font-bold text-rose-600 flex items-center gap-2">
+                        <Ban size={16} />
+                        {new Date(selectedAsset.liquidatedDate).toLocaleDateString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
+                  {selectedAsset.transferredDate && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Ngày chuyển đi</p>
+                      <p className="text-sm font-bold text-amber-600 flex items-center gap-2">
+                        <ArrowRight size={16} />
+                        {new Date(selectedAsset.transferredDate).toLocaleDateString('vi-VN')}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-4 rounded-2xl bg-slate-50 p-6 border border-slate-100 dark:bg-slate-800/50 dark:border-slate-800">
@@ -1935,20 +1952,41 @@ export default function App() {
                   </div>
                 )}
                 
-                <div className="mt-8 flex gap-3">
+                <div className="mt-8 flex flex-wrap gap-3">
                   <button 
                     onClick={() => {
                       setEditingAsset(selectedAsset);
                       setSelectedAsset(null);
                     }}
-                    className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 dark:shadow-blue-900/20"
+                    className="flex-1 min-w-[120px] flex items-center justify-center gap-2 rounded-xl bg-slate-100 py-3 text-sm font-bold text-slate-700 transition-all hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                   >
                     <Edit2 size={18} />
                     Chỉnh sửa
                   </button>
                   <button 
+                    onClick={() => {
+                      setStatusUpdateAsset(selectedAsset);
+                      setStatusUpdateType(selectedAsset.notes.toLowerCase().includes('hỏng') ? 'repair' : 'damage');
+                      setSelectedAsset(null);
+                    }}
+                    className="flex-1 min-w-[120px] flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 dark:shadow-blue-900/20"
+                  >
+                    <RefreshCw size={18} />
+                    Cập nhật
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setIsConfirmingDelete(selectedAsset.id);
+                      setSelectedAsset(null);
+                    }}
+                    className="flex-1 min-w-[120px] flex items-center justify-center gap-2 rounded-xl bg-rose-50 py-3 text-sm font-bold text-rose-600 transition-all hover:bg-rose-100 dark:bg-rose-900/20 dark:text-rose-400 dark:hover:bg-rose-900/40"
+                  >
+                    <Trash2 size={18} />
+                    Xóa
+                  </button>
+                  <button 
                     onClick={() => setSelectedAsset(null)}
-                    className="flex-1 rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                    className="flex-1 min-w-[120px] rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                   >
                     Đóng
                   </button>
@@ -2451,6 +2489,128 @@ export default function App() {
                   className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-200 transition-all hover:bg-rose-700 dark:shadow-rose-900/20"
                 >
                   Xác nhận xóa
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Status Update Modal */}
+      <AnimatePresence>
+        {statusUpdateAsset && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setStatusUpdateAsset(null)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-slate-900"
+            >
+              <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                      <RefreshCw size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-white">Cập nhật trạng thái</h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">{statusUpdateAsset.name}</p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => setStatusUpdateAsset(null)}
+                    className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { id: 'damage', label: 'Báo hỏng', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50', darkBg: 'dark:bg-rose-900/20' },
+                    { id: 'repair', label: 'Sửa chữa', icon: Wrench, color: 'text-emerald-600', bg: 'bg-emerald-50', darkBg: 'dark:bg-emerald-900/20' },
+                    { id: 'liquidate', label: 'Thanh lý', icon: Ban, color: 'text-slate-600', bg: 'bg-slate-50', darkBg: 'dark:bg-slate-800' },
+                    { id: 'transfer', label: 'Chuyển đi', icon: ArrowRight, color: 'text-amber-600', bg: 'bg-amber-50', darkBg: 'dark:bg-amber-900/20' },
+                  ].map((type) => (
+                    <button
+                      key={type.id}
+                      onClick={() => setStatusUpdateType(type.id as any)}
+                      className={`flex items-center gap-3 rounded-xl border-2 p-3 transition-all ${
+                        statusUpdateType === type.id
+                          ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-900/20'
+                          : 'border-slate-100 bg-white hover:border-slate-200 dark:border-slate-800 dark:bg-slate-900'
+                      }`}
+                    >
+                      <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${type.bg} ${type.color} ${type.darkBg}`}>
+                        <type.icon size={16} />
+                      </div>
+                      <span className={`text-sm font-bold ${statusUpdateType === type.id ? 'text-blue-600 dark:text-blue-400' : 'text-slate-600 dark:text-slate-400'}`}>
+                        {type.label}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Ngày thực hiện</label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      <input
+                        type="date"
+                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-blue-500 focus:bg-white dark:border-slate-800 dark:bg-slate-800/50 dark:text-white"
+                        value={statusUpdateDate}
+                        onChange={(e) => setStatusUpdateDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Ghi chú chi tiết</label>
+                    <textarea
+                      placeholder="Nhập lý do, tình trạng hoặc thông tin bổ sung..."
+                      className="min-h-[100px] w-full rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm outline-none focus:border-blue-500 focus:bg-white dark:border-slate-800 dark:bg-slate-800/50 dark:text-white"
+                      value={statusUpdateNote}
+                      onChange={(e) => setStatusUpdateNote(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="updateAssetNotes"
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      checked={updateAssetNotes}
+                      onChange={(e) => setUpdateAssetNotes(e.target.checked)}
+                    />
+                    <label htmlFor="updateAssetNotes" className="text-sm font-medium text-slate-600 dark:text-slate-400">
+                      Đồng thời cập nhật vào ghi chú chính của tài sản
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 bg-slate-50 p-6 dark:bg-slate-800/50">
+                <button
+                  onClick={() => setStatusUpdateAsset(null)}
+                  className="flex-1 rounded-xl border border-slate-200 bg-white py-3 text-sm font-bold text-slate-700 transition-all hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  onClick={handleStatusUpdate}
+                  className="flex-1 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 active:scale-[0.98] dark:shadow-blue-900/20"
+                >
+                  Lưu cập nhật
                 </button>
               </div>
             </motion.div>
